@@ -1,8 +1,9 @@
+import re
 import numpy as np
 from datetime import timedelta
 from dateutil import parser
 import pandas as pd
-
+import os
 
 def make_data(data_dir):
     df = pd.read_csv('{}/EVO_Training_Data_Original.csv'.format(data_dir), index_col=False)
@@ -47,3 +48,33 @@ def make_data(data_dir):
     target = target[:, step_size - 1, :]
 
     np.savez('{}/data'.format(data_dir), X=data, y=target)
+
+def make_data_single(data_dir):
+    seed = int(re.search('seed(\d)', data_dir).group(1))
+    data = pd.read_csv('data/training_data_all_interval_120_mode.csv')
+
+    float_vars = ['mdot', 'Tod', 'RHod', 'Tid', 'Vidu', 'cap_nom', 'Qsens', 'Qlat']
+    int_vars = ['mode']
+    target_vars = ['Lsens', 'Llat']
+
+    # data['mode'] = data.apply(lambda x: np.where(x[mode_var] == 1)[0][0], axis=1)
+
+    np.random.seed(seed)
+
+    idx_permute = np.random.permutation(data.index)
+    trn_ratio = int(len(idx_permute) * 0.9)
+    trn_idx = idx_permute[:trn_ratio]
+    test_idx = idx_permute[trn_ratio:]
+
+    trn_data = data.loc[trn_idx]
+    test_data = data.loc[test_idx]
+
+    os.makedirs('data/seed{}_trn'.format(seed))
+    os.makedirs('data/seed{}_test'.format(seed))
+
+    np.savez('data/seed{}_trn/data.npz'.format(seed), float_vars=trn_data[float_vars],
+             int_vars=trn_data[int_vars], target_vars=trn_data[target_vars])
+    np.savez('data/seed{}_test/data.npz'.format(seed), float_vars=test_data[float_vars],
+             int_vars=test_data[int_vars], target_vars=test_data[target_vars])
+    np.savez('data/seed{}_trn/idx_permute.npz'.format(seed), trn_idx = trn_idx,
+             test_idx=test_idx)

@@ -213,38 +213,25 @@ class Model():
 
 
 class SimpleModel():
-    def __init__(self, data_inputs, mlp_layer, time_step,
-                 vocab_size, embedding_size, no_mode):
-        inputs = data_inputs['inputs']  # [batch_size, time_step, dim]
+    def __init__(self, data_inputs, mlp_layer,
+                 vocab_size, embedding_size, weights):
+        self.float_inputs = data_inputs['float_vars']
+        self.int_inputs = data_inputs['int_vars']
+        self.targets = data_inputs['target_vars']
 
-        dim = inputs.shape.as_list()[2]
+        self.weights = tf.cast(tf.not_equal(self.int_inputs, 0), tf.float32) * weights + 1
+        # self.weights = tf.ones_like(self.int_inputs)
 
-        inputs = inputs[:,-time_step:,:]
-        print(inputs.shape)
+        self.target_s = self.targets[:,0]
+        self.target_l = self.targets[:,1]
 
-        mode_var = tf.cast(inputs[:,:,3], tf.int32)
+        self.embedding_vector = tf.get_variable('embed_var',
+                                           shape=(vocab_size, embedding_size))
 
-        inputs_1 = inputs[:, :, :3]
-        inputs_2 = inputs[:, :, 4:]
-        float_inputs = tf.concat([inputs_1, inputs_2], axis=2)
+        self.mode_var_embedding = tf.nn.embedding_lookup(self.embedding_vector,
+                                                         self.int_inputs)
 
-        float_inputs = tf.reshape(float_inputs, (-1, time_step * (dim - 1)))
-
-        targets = data_inputs['targets']  # [batch_size, 1, classes]
-
-        if no_mode:
-            inputs = float_inputs
-        else:
-            embedding_vector = tf.get_variable('embed_var',
-                                               shape=(vocab_size, embedding_size))
-
-            mode_var_embedding = tf.nn.embedding_lookup(embedding_vector, mode_var)
-
-            mode_var_embedding_flattened = tf.reshape(mode_var_embedding, (-1,
-                                                                           embedding_size *
-                                                                           time_step))
-            inputs = tf.concat([float_inputs, mode_var_embedding_flattened], axis=1)
-
+        inputs = tf.concat([self.float_inputs, self.mode_var_embedding], axis=1)
 
         def mlp_scalar(inputs, layer_num):
             layer_list = [inputs]
@@ -252,22 +239,59 @@ class SimpleModel():
                 layer_inputs = layer_list[-1]
                 layer_list.append(
                     tf.contrib.layers.fully_connected(layer_inputs, hidden_dim))
-            output = tf.contrib.layers.fully_connected(layer_list[-1], 2, None)
+            output = tf.contrib.layers.fully_connected(layer_list[-1], 1, None)
+            output = tf.squeeze(output)
             return output
 
-        pred = mlp_scalar(inputs, mlp_layer)
+        def mape(pred, target, threshold):
+            mask = tf.abs(target) > threshold
+            pred = tf.boolean_mask(pred, mask)
+            target = tf.boolean_mask(target, mask)
+            result = tf.abs((pred - target) / target)
+            return result
 
-        self.pred = tf.expand_dims(pred, 1)
-        self.loss = tf.losses.mean_squared_error(targets, self.pred)
-        self.loss_s = tf.losses.absolute_difference(targets[:, :, 0], self.pred[:,:,0])
-        self.loss_l = tf.losses.absolute_difference(targets[:,:,1], self.pred[:,:,1])
+        self.pred_s = mlp_scalar(inputs, mlp_layer)
+        self.pred_l = mlp_scalar(inputs, mlp_layer)
 
-        self.summary_list, self.update_op_list = self.make_summary({'loss': self.loss,
-                                                                    'loss_s': self.loss_s,
-                                                                    'loss_l': self.loss_l})
+        self.mape_s_3 = mape(self.pred_s, self.target_s, 1e-3)
+        self.mape_l_3 = mape(self.pred_l, self.target_s, 1e-3)
+
+        self.mape_s_2 = mape(self.pred_s, self.target_s, 1e-2)
+        self.mape_l_2 = mape(self.pred_s, self.target_l, 1e-2)
+
+        # self.mse_l = tf.losses.mean_squared_error(self.target_s, self.pred_s)
+        # self.mse_s = tf.losses.mean_squared_error(self.target_l, self.pred_l)
+
+        self.cost_l = tf.losses.mean_squared_error(self.target_s, self.pred_s,
+                                                   self.weights)
+        self.cost_s = tf.losses.mean_squared_error(self.target_l, self.pred_l,
+                                                   self.weights)
+
+        self.mae_s = tf.losses.absolute_difference(self.target_s, self.pred_s)
+        self.mae_l = tf.losses.absolute_difference(self.target_l, self.pred_l)
+
+        self.summary_list, self.update_op_list = self.make_summary({'mae_s':
+                                                                        self.mae_s,
+                                                                    'mae_l':
+                                                                        self.mae_l,
+                                                                    'mape_s_3' :
+                                                                    self.mape_s_3,
+                                                                    'mape_l_3':
+                                                                    self.mape_l_3,
+                                                                    'mape_s_2':
+                                                                    self.mape_s_2,
+                                                                    'mape_l_2':
+                                                                    self.mape_l_2,
+                                                                    'cost_l':
+                                                                    self.cost_l,
+                                                                    'cost_s':
+                                                                    self.cost_s
+                                                                    },
+                                                                   )
 
         with tf.control_dependencies(self.update_op_list.values()):
-            self.train_op = tf.train.AdamOptimizer().minimize(self.loss)
+            self.train_op_s = tf.train.AdamOptimizer().minimize(self.cost_s)
+            self.train_op_l = tf.train.AdamOptimizer().minimize(self.cost_l)
 
         self.summary = tf.summary.merge([tf.summary.scalar(key, val) for key, val in \
                                          self.summary_list.items()])
@@ -282,12 +306,3 @@ class SimpleModel():
             update_op_list[key] = update_op
             summary_list[key] = mean
         return summary_list, update_op_list
-
-
-
-
-
-
-
-
-
